@@ -41,19 +41,20 @@ class Program
         Console.WriteLine($"{OmnidasInfo.Name} - Conversor Universal de Formatos para Windows");
         Console.WriteLine();
         Console.WriteLine("Uso:");
-        Console.WriteLine("  omnidas convert <arquivo> --to <extensao>");
+        Console.WriteLine("  omnidas convert <arquivo-ou-pasta> --to <extensao> [--recursive]");
         Console.WriteLine("  omnidas formats [--from <extensao>]");
         Console.WriteLine();
         Console.WriteLine("Exemplos:");
         Console.WriteLine("  omnidas convert audio.opus --to mp3");
-        Console.WriteLine("  omnidas convert video.mp4 --to m4a");
+        Console.WriteLine("  omnidas convert \"C:\\Musicas\\MinhaPasta\" --to mp3");
         Console.WriteLine("  omnidas formats --from opus");
     }
 
     private static async Task<int> HandleConvertAsync(string[] args)
     {
-        string? filePath = null;
+        string? targetPath = null;
         string? targetExt = null;
+        bool recursive = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -61,33 +62,97 @@ class Program
             {
                 targetExt = args[++i];
             }
-            else if (filePath == null && !args[i].StartsWith('-'))
+            else if (args[i] is "--recursive" or "-r")
             {
-                filePath = args[i];
+                recursive = true;
+            }
+            else if (targetPath == null && !args[i].StartsWith('-'))
+            {
+                targetPath = args[i];
             }
         }
 
-        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrWhiteSpace(targetExt))
+        if (string.IsNullOrWhiteSpace(targetPath) || string.IsNullOrWhiteSpace(targetExt))
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("Uso obrigatório: omnidas convert <arquivo> --to <formato>");
+            Console.WriteLine("Uso obrigatório: omnidas convert <arquivo-ou-pasta> --to <formato>");
             Console.ResetColor();
             return 1;
         }
 
-        if (!File.Exists(filePath))
+        targetExt = targetExt.TrimStart('.');
+        var manager = new ConversionManager();
+
+        // Cenário 1: É um DIRETÓRIO (Conversão em Lote)
+        if (Directory.Exists(targetPath))
+        {
+            var searchOpt = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            var allFiles = Directory.GetFiles(targetPath, "*.*", searchOpt);
+
+            var convertibleFiles = allFiles.Where(f =>
+            {
+                var ext = Path.GetExtension(f).TrimStart('.');
+                if (ext.Equals(targetExt, StringComparison.OrdinalIgnoreCase)) return false;
+                return manager.FindAdapter(ext, targetExt) != null;
+            }).ToList();
+
+            if (!convertibleFiles.Any())
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"Nenhum arquivo compatível encontrado na pasta para converter para .{targetExt}.");
+                Console.ResetColor();
+                return 0;
+            }
+
+            Console.WriteLine($"\n[Omnidas] Lote detectado: {convertibleFiles.Count} arquivo(s) na pasta para converter para .{targetExt}.\n");
+
+            int successCount = 0;
+            int errorCount = 0;
+            var swTotal = System.Diagnostics.Stopwatch.StartNew();
+
+            for (int i = 0; i < convertibleFiles.Count; i++)
+            {
+                var file = convertibleFiles[i];
+                var fileName = Path.GetFileName(file);
+                Console.Write($"[{i + 1}/{convertibleFiles.Count}] {fileName} ... ");
+
+                try
+                {
+                    var result = await manager.ConvertAsync(file, targetExt);
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("✓ Concluído");
+                    Console.ResetColor();
+                    successCount++;
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"✗ Falha: {ex.Message}");
+                    Console.ResetColor();
+                    errorCount++;
+                }
+            }
+
+            swTotal.Stop();
+            Console.WriteLine();
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"Lote finalizado em {swTotal.Elapsed.TotalSeconds:F1}s: {successCount} sucesso(s), {errorCount} falha(s).");
+            Console.ResetColor();
+            return errorCount == 0 ? 0 : 2;
+        }
+
+        // Cenário 2: É um ARQUIVO individual
+        if (!File.Exists(targetPath))
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.Error.WriteLine($"Erro: Arquivo '{filePath}' não encontrado.");
+            Console.Error.WriteLine($"Erro: O caminho especificado '{targetPath}' não é um arquivo nem uma pasta existente.");
             Console.ResetColor();
             return 1;
         }
 
-        var fileInfo = new FileInfo(filePath);
-        targetExt = targetExt.TrimStart('.');
+        var fileInfo = new FileInfo(targetPath);
 
         Console.WriteLine($"\n[Omnidas] Convertendo '{fileInfo.Name}' para .{targetExt}...");
-        var manager = new ConversionManager();
 
         var progress = new Progress<ConversionProgress>(p =>
         {
