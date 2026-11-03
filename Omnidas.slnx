@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Omnidas.Cli/Omnidas.Cli.csproj" />
+    <Project Path="src/Omnidas.Core/Omnidas.Core.csproj" />
+    <Project Path="tests/Omnidas.Core.Tests/Omnidas.Core.Tests.csproj" />
+  </Folder>
+</Solution>
