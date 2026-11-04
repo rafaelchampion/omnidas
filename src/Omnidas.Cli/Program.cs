@@ -41,12 +41,12 @@ class Program
         Console.WriteLine($"{OmnidasInfo.Name} - Conversor Universal de Formatos para Windows");
         Console.WriteLine();
         Console.WriteLine("Uso:");
-        Console.WriteLine("  omnidas convert <arquivo-ou-pasta> --to <extensao> [--recursive]");
+        Console.WriteLine("  omnidas convert <arquivo-ou-pasta> --to <extensao> [--threads <num>] [--recursive]");
         Console.WriteLine("  omnidas formats [--from <extensao>]");
         Console.WriteLine();
         Console.WriteLine("Exemplos:");
         Console.WriteLine("  omnidas convert audio.opus --to mp3");
-        Console.WriteLine("  omnidas convert \"C:\\Musicas\\MinhaPasta\" --to mp3");
+        Console.WriteLine("  omnidas convert \"G:\\MeusAudios\" --to mp3 --threads 8");
         Console.WriteLine("  omnidas formats --from opus");
     }
 
@@ -55,12 +55,17 @@ class Program
         string? targetPath = null;
         string? targetExt = null;
         bool recursive = false;
+        int? threads = null;
 
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] is "--to" or "-t" && i + 1 < args.Length)
             {
                 targetExt = args[++i];
+            }
+            else if (args[i] is "--threads" && i + 1 < args.Length && int.TryParse(args[++i], out var t))
+            {
+                threads = t;
             }
             else if (args[i] is "--recursive" or "-r")
             {
@@ -83,7 +88,7 @@ class Program
         targetExt = targetExt.TrimStart('.');
         var manager = new ConversionManager();
 
-        // Cenário 1: É um DIRETÓRIO (Conversão em Lote)
+        // Cenário 1: É um DIRETÓRIO (Conversão em Lote Paralela)
         if (Directory.Exists(targetPath))
         {
             var searchOpt = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
@@ -104,41 +109,52 @@ class Program
                 return 0;
             }
 
-            Console.WriteLine($"\n[Omnidas] Lote detectado: {convertibleFiles.Count} arquivo(s) na pasta para converter para .{targetExt}.\n");
+            var batchManager = new BatchConversionManager(manager);
+            var sampleExt = Path.GetExtension(convertibleFiles[0]).TrimStart('.');
+            var insight = batchManager.Analyzer.Analyze(sampleExt, targetExt, convertibleFiles.Count);
+            int activeThreads = threads ?? insight.RecommendedConcurrency;
 
-            int successCount = 0;
-            int errorCount = 0;
-            var swTotal = System.Diagnostics.Stopwatch.StartNew();
+            Console.WriteLine("\n========================================================");
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"[Omnidas] Lote: {convertibleFiles.Count} arquivo(s) -> .{targetExt}");
+            Console.ResetColor();
+            Console.WriteLine($"Perfil: {insight.Summary}");
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"Diagnóstico: {insight.Explanation}");
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine($"Paralelismo: Executando {activeThreads} conversões simultâneas");
+            Console.ResetColor();
+            Console.WriteLine("========================================================\n");
 
-            for (int i = 0; i < convertibleFiles.Count; i++)
+            var progress = new Progress<BatchProgressItem>(p =>
             {
-                var file = convertibleFiles[i];
-                var fileName = Path.GetFileName(file);
-                Console.Write($"[{i + 1}/{convertibleFiles.Count}] {fileName} ... ");
+                var totalDone = p.CompletedFiles + p.FailedFiles;
+                var percent = (double)totalDone / p.TotalFiles * 100.0;
+                var etaStr = p.EstimatedRemainingTime.HasValue 
+                    ? $" | Restante: ~{p.EstimatedRemainingTime.Value:hh\\:mm\\:ss}" 
+                    : "";
 
-                try
+                Console.Write($"\rProgresso: [{totalDone}/{p.TotalFiles}] ({percent:F1}%) | Tempo decorrido: {p.ElapsedTime:mm\\:ss}{etaStr}   ");
+            });
+
+            var result = await batchManager.ConvertBatchAsync(convertibleFiles, targetExt, activeThreads, progress);
+
+            Console.WriteLine("\n");
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"✓ Lote concluído em {result.TotalTime.TotalMinutes:F1} min ({result.TotalTime.TotalSeconds:F1}s)");
+            Console.WriteLine($"  - Sucessos: {result.SuccessCount}");
+            if (result.FailureCount > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  - Falhas: {result.FailureCount}");
+                foreach (var err in result.Errors.Take(5))
                 {
-                    var result = await manager.ConvertAsync(file, targetExt);
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine("✓ Concluído");
-                    Console.ResetColor();
-                    successCount++;
-                }
-                catch (Exception ex)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"✗ Falha: {ex.Message}");
-                    Console.ResetColor();
-                    errorCount++;
+                    Console.WriteLine($"    * {Path.GetFileName(err.FilePath)}: {err.ErrorMessage}");
                 }
             }
-
-            swTotal.Stop();
-            Console.WriteLine();
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine($"Lote finalizado em {swTotal.Elapsed.TotalSeconds:F1}s: {successCount} sucesso(s), {errorCount} falha(s).");
             Console.ResetColor();
-            return errorCount == 0 ? 0 : 2;
+
+            return result.FailureCount == 0 ? 0 : 2;
         }
 
         // Cenário 2: É um ARQUIVO individual
@@ -154,7 +170,7 @@ class Program
 
         Console.WriteLine($"\n[Omnidas] Convertendo '{fileInfo.Name}' para .{targetExt}...");
 
-        var progress = new Progress<ConversionProgress>(p =>
+        var fileProgress = new Progress<ConversionProgress>(p =>
         {
             if (p.TimeProcessed.HasValue)
             {
@@ -165,7 +181,7 @@ class Program
         try
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var result = await manager.ConvertAsync(fileInfo.FullName, targetExt, progress: progress);
+            var result = await manager.ConvertAsync(fileInfo.FullName, targetExt, progress: fileProgress);
             sw.Stop();
 
             Console.WriteLine();
