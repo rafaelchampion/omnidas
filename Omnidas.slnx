@@ -3,6 +3,9 @@
     <Project Path="src/Omnidas.Cli/Omnidas.Cli.csproj" />
     <Project Path="src/Omnidas.Core/Omnidas.Core.csproj" />
     <Project Path="src/Omnidas.Gui/Omnidas.Gui.csproj" />
+    <Project Path="src/Omnidas.WinUI/Omnidas.WinUI.csproj">
+      <Platform Project="x86" />
+    </Project>
     <Project Path="tests/Omnidas.Core.Tests/Omnidas.Core.Tests.csproj" />
   </Folder>
 </Solution>

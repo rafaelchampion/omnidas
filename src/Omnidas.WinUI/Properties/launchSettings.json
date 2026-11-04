@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Omnidas.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Omnidas.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
